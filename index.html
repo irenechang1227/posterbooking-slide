@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>PosterBooking 電子招生看板｜多海報輪播版</title>
+<style>
+  :root {
+    --ticker-height: 50px;
+    --font-family: "Microsoft JhengHei", "微軟正黑體", Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #fff;
+    font-family: var(--font-family);
+    font-weight: 700;
+  }
+
+  #app {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+
+  #posterStage {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: #fff;
+  }
+
+  #posterCanvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+  }
+
+  #ticker {
+    position: relative;
+    flex: 0 0 var(--ticker-height);
+    height: var(--ticker-height);
+    overflow: hidden;
+    background: #000;
+    color: #fff;
+    white-space: nowrap;
+  }
+
+  #tickerTrack {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    width: max-content;
+    height: 100%;
+    will-change: transform;
+    animation: marquee 28s linear infinite;
+  }
+
+  .tickerCopy {
+    display: inline-flex;
+    align-items: center;
+    height: 100%;
+    padding-right: 90px;
+    font-size: clamp(24px, 2.1vw, 36px);
+    line-height: 50px;
+    letter-spacing: .5px;
+  }
+
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <main id="posterStage">
+    <canvas id="posterCanvas" width="1900" height="1020" aria-label="海報顯示區"></canvas>
+  </main>
+  <footer id="ticker" aria-label="招生課程跑馬燈">
+    <div id="tickerTrack">
+      <div class="tickerCopy"></div>
+      <div class="tickerCopy" aria-hidden="true"></div>
+    </div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const CANVAS_WIDTH = 1900;
+  const CANVAS_HEIGHT = 1020;
+  const POSTER_FILES = Array.from({ length: 100 }, (_, i) => `poster(${i + 1}).jpg`);
+  const FALLBACK_POSTER_FILE = 'poster.jpg';
+  const SLIDE_INTERVAL_MS = 5000;
+  const COURSES_FILE = 'courses.json';
+
+  let posterImages = [];
+  let currentPosterIndex = 0;
+  let slideTimer = null;
+
+  const canvas = document.getElementById('posterCanvas');
+  const context = canvas.getContext('2d', { alpha: false });
+  const tickerTrack = document.getElementById('tickerTrack');
+  const tickerCopies = Array.from(document.querySelectorAll('.tickerCopy'));
+
+  function clearCanvas() {
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    context.restore();
+  }
+
+  function drawPoster(image) {
+    clearCanvas();
+
+    const scale = Math.min(
+      CANVAS_WIDTH / image.naturalWidth,
+      CANVAS_HEIGHT / image.naturalHeight
+    );
+
+    const drawWidth = Math.round(image.naturalWidth * scale);
+    const drawHeight = Math.round(image.naturalHeight * scale);
+    const drawX = Math.round((CANVAS_WIDTH - drawWidth) / 2);
+    const drawY = Math.round((CANVAS_HEIGHT - drawHeight) / 2);
+
+    context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  }
+
+  function loadImage(fileName) {
+    return new Promise(resolve => {
+      const image = new Image();
+      image.onload = () => resolve({ fileName, image });
+      image.onerror = () => resolve(null);
+      image.src = `${fileName}?v=${Date.now()}`;
+    });
+  }
+
+  function showPoster(index) {
+    if (!posterImages.length) {
+      clearCanvas();
+      return;
+    }
+
+    currentPosterIndex = ((index % posterImages.length) + posterImages.length) % posterImages.length;
+    drawPoster(posterImages[currentPosterIndex].image);
+  }
+
+  function startSlideshow() {
+    if (slideTimer) {
+      clearInterval(slideTimer);
+      slideTimer = null;
+    }
+
+    if (posterImages.length <= 1) return;
+
+    slideTimer = setInterval(() => {
+      showPoster(currentPosterIndex + 1);
+    }, SLIDE_INTERVAL_MS);
+  }
+
+  async function loadPosters() {
+    clearCanvas();
+
+    const results = await Promise.all(POSTER_FILES.map(loadImage));
+    posterImages = results.filter(Boolean);
+
+    if (!posterImages.length) {
+      const fallback = await loadImage(FALLBACK_POSTER_FILE);
+      if (fallback) posterImages = [fallback];
+    }
+
+    if (!posterImages.length) {
+      console.error('找不到 poster(1).jpg ~ poster(100).jpg，也找不到 poster.jpg');
+      clearCanvas();
+      return;
+    }
+
+    currentPosterIndex = 0;
+    showPoster(0);
+    startSlideshow();
+  }
+
+  function normalizeCourseLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return null;
+
+    const match = trimmed.match(/^(.*?)【\s*([^：:】]+)\s*[：:]\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*】\s*$/);
+
+    if (!match) {
+      return { sortable: false, month: 99, day: 99, output: trimmed };
+    }
+
+    const name = match[1].trim();
+    const type = match[2].trim();
+    const month = Number(match[3]);
+    const day = Number(match[4]);
+
+    return {
+      sortable: true,
+      month,
+      day,
+      output: `${month}/${day}【${type}】${name}`
+    };
+  }
+
+  function buildTickerText(lines) {
+    const courses = lines
+      .map(normalizeCourseLine)
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.sortable && b.sortable) {
+          return a.month - b.month || a.day - b.day || a.output.localeCompare(b.output, 'zh-Hant');
+        }
+        if (a.sortable) return -1;
+        if (b.sortable) return 1;
+        return a.output.localeCompare(b.output, 'zh-Hant');
+      });
+
+    if (!courses.length) return '📢 最新招生｜歡迎報名！';
+    return `📢 最新招生｜${courses.map(course => course.output).join('｜')}｜歡迎報名！`;
+  }
+
+  function setTicker(text) {
+    tickerCopies.forEach(copy => { copy.textContent = text; });
+
+    requestAnimationFrame(() => {
+      const singleWidth = tickerCopies[0].scrollWidth;
+      const viewportWidth = document.documentElement.clientWidth;
+      const distance = Math.max(singleWidth, viewportWidth);
+      const pixelsPerSecond = 95;
+      const duration = Math.max(12, distance / pixelsPerSecond);
+      tickerTrack.style.animationDuration = `${duration}s`;
+    });
+  }
+
+  async function loadCourses() {
+    try {
+      const response = await fetch(`${COURSES_FILE}?v=${Date.now()}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const lines = Array.isArray(data) ? data : data.courses;
+      setTicker(buildTickerText(Array.isArray(lines) ? lines : []));
+    } catch (error) {
+      console.error('無法載入 courses.json：', error);
+      setTicker('📢 最新招生｜歡迎報名！');
+    }
+  }
+
+  window.addEventListener('resize', () => {
+    const text = tickerCopies[0].textContent || '📢 最新招生｜歡迎報名！';
+    setTicker(text);
+  });
+
+  loadPosters();
+  loadCourses();
+})();
+</script>
+</body>
+</html>
